@@ -9,6 +9,7 @@ import '../features/wallet/scan_qr_screen.dart';
 import '../features/wallet/credential_detail_screen.dart';
 import '../features/wallet/verification_result_screen.dart';
 import '../features/auth/pin_screen.dart';
+import '../features/auth/set_pin_screen.dart';
 import '../features/wallet/issue_credential_screen.dart';
 import '../models/credential.dart';
 
@@ -59,6 +60,12 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/issue-credential',
       builder: (context, state) => const IssueCredentialScreen(),
+    ),
+    GoRoute(
+      path: '/set-pin',
+      builder: (context, state) => SetPinScreen(
+        redirectTo: state.extra is String ? state.extra as String : '/wallet',
+      ),
     ),
   ],
 );
