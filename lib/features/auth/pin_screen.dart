@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -18,12 +20,29 @@ class PinScreen extends StatefulWidget {
 class _PinScreenState extends State<PinScreen> {
   String pin = '';
   bool _navigating = false;
+  int _lockSecondsRemaining = 0;
+  Timer? _lockTimer;
+
   final WalletSecurityService _securityService = WalletSecurityService();
 
   @override
   void initState() {
     super.initState();
-    _securityService.ensureDemoPinExists();
+    _checkPinSetup();
+  }
+
+  @override
+  void dispose() {
+    _lockTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _checkPinSetup() async {
+    final hasPin = await _securityService.hasPin();
+    if (!mounted) return;
+    if (!hasPin) {
+      context.go('/set-pin', extra: widget.redirectTo);
+    }
   }
 
   void _safeGo(String location) {
@@ -35,18 +54,39 @@ class _PinScreenState extends State<PinScreen> {
     });
   }
 
+  void _startLockCountdown(int seconds) {
+    _lockTimer?.cancel();
+    setState(() => _lockSecondsRemaining = seconds);
+    _lockTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _lockSecondsRemaining--;
+        if (_lockSecondsRemaining <= 0) {
+          timer.cancel();
+          _lockSecondsRemaining = 0;
+        }
+      });
+    });
+  }
+
+  String _formatLock(int seconds) {
+    if (seconds < 60) return '${seconds}s';
+    if (seconds < 3600) return '${seconds ~/ 60} min';
+    return '${seconds ~/ 3600} h';
+  }
+
   Future<void> _authenticateWithBiometrics() async {
     final authenticated = await _securityService.authenticateWithBiometrics(
       reason: 'Confirma tu identidad para desbloquear el wallet',
     );
-
     if (!mounted) return;
-
     if (authenticated) {
       _safeGo(widget.redirectTo);
       return;
     }
-
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Text('No se pudo autenticar con biometría. Usa tu PIN.'),
@@ -55,42 +95,42 @@ class _PinScreenState extends State<PinScreen> {
   }
 
   void _addDigit(String digit) {
-    if (pin.length < 4) {
-      setState(() {
-        pin += digit;
-      });
-
-      if (pin.length == 4) {
-        _validatePin();
-      }
-    }
+    if (_lockSecondsRemaining > 0 || pin.length >= 4) return;
+    setState(() => pin += digit);
+    if (pin.length == 4) _validatePin();
   }
 
   void _removeDigit() {
-    if (pin.isNotEmpty) {
-      setState(() {
-        pin = pin.substring(0, pin.length - 1);
-      });
-    }
+    if (pin.isNotEmpty) setState(() => pin = pin.substring(0, pin.length - 1));
   }
 
   Future<void> _validatePin() async {
-    final isValid = await _securityService.verifyPin(pin);
-
+    final result = await _securityService.verifyPin(pin);
     if (!mounted) return;
 
-    if (isValid) {
-      _safeGo(widget.redirectTo);
-    } else {
-      setState(() {
-        pin = '';
-      });
+    switch (result.status) {
+      case PinStatus.success:
+        _safeGo(widget.redirectTo);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('PIN incorrecto'),
-        ),
-      );
+      case PinStatus.locked:
+        setState(() => pin = '');
+        _startLockCountdown(result.lockSeconds ?? 30);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Demasiados intentos. Bloqueado por ${_formatLock(result.lockSeconds ?? 30)}.',
+            ),
+          ),
+        );
+
+      case PinStatus.wrongPin:
+        setState(() => pin = '');
+        final left = result.attemptsLeft;
+        final msg = left != null
+            ? 'PIN incorrecto. ${left == 1 ? '1 intento restante' : '$left intentos restantes'} antes del bloqueo.'
+            : 'PIN incorrecto.';
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(msg)));
     }
   }
 
@@ -113,10 +153,7 @@ class _PinScreenState extends State<PinScreen> {
         alignment: Alignment.center,
         child: Text(
           value,
-          style: const TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.w600,
-          ),
+          style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -124,6 +161,8 @@ class _PinScreenState extends State<PinScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final locked = _lockSecondsRemaining > 0;
+
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -131,58 +170,69 @@ class _PinScreenState extends State<PinScreen> {
           child: Column(
             children: [
               const SizedBox(height: 40),
-              const Icon(
-                Icons.lock_rounded,
+              Icon(
+                locked ? Icons.lock_clock : Icons.lock_rounded,
                 size: 54,
-                color: Color(0xFF0F62FE),
+                color: locked ? Colors.red.shade400 : const Color(0xFF0F62FE),
               ),
               const SizedBox(height: 20),
-              const Text(
-                'Wallet bloqueado',
-                style: TextStyle(
+              Text(
+                locked ? 'Wallet bloqueado' : 'Wallet bloqueado',
+                style: const TextStyle(
                   fontSize: 26,
                   fontWeight: FontWeight.w800,
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Usa biometría o PIN para acceder a tus credenciales.',
-                style: TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 15,
+              if (locked)
+                Text(
+                  'Demasiados intentos fallidos.\nIntenta de nuevo en ${_formatLock(_lockSecondsRemaining)}.',
+                  style: TextStyle(
+                    color: Colors.red.shade400,
+                    fontSize: 15,
+                  ),
+                  textAlign: TextAlign.center,
+                )
+              else
+                const Text(
+                  'Usa biometría o PIN para acceder a tus credenciales.',
+                  style: TextStyle(color: Color(0xFF64748B), fontSize: 15),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
-              ),
               const SizedBox(height: 24),
-              TextButton.icon(
-                onPressed: _authenticateWithBiometrics,
-                icon: const Icon(Icons.fingerprint),
-                label: const Text('Usar biometría'),
-              ),
+              if (!locked)
+                TextButton.icon(
+                  onPressed: _authenticateWithBiometrics,
+                  icon: const Icon(Icons.fingerprint),
+                  label: const Text('Usar biometría'),
+                ),
               const SizedBox(height: 24),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(
-                  4,
-                  (index) => _buildDot(index < pin.length),
-                ),
+                children: List.generate(4, (i) => _buildDot(i < pin.length)),
               ),
               const SizedBox(height: 40),
               Expanded(
-                child: GridView.count(
-                  crossAxisCount: 3,
-                  children: [
-                    ...List.generate(9, (index) {
-                      final number = (index + 1).toString();
-                      return _buildKey(number);
-                    }),
-                    const SizedBox(),
-                    _buildKey('0'),
-                    GestureDetector(
-                      onTap: _removeDigit,
-                      child: const Icon(Icons.backspace_outlined),
+                child: AbsorbPointer(
+                  absorbing: locked,
+                  child: Opacity(
+                    opacity: locked ? 0.3 : 1.0,
+                    child: GridView.count(
+                      crossAxisCount: 3,
+                      children: [
+                        ...List.generate(
+                          9,
+                          (i) => _buildKey((i + 1).toString()),
+                        ),
+                        const SizedBox(),
+                        _buildKey('0'),
+                        GestureDetector(
+                          onTap: _removeDigit,
+                          child: const Icon(Icons.backspace_outlined),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ],

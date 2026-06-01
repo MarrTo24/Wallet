@@ -1,3 +1,7 @@
+import 'dart:convert';
+import 'dart:math';
+
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class SessionService {
@@ -7,7 +11,7 @@ class SessionService {
   static const String _nameKey = 'user_name';
   static const String _emailKey = 'user_email';
   static const String _aliasKey = 'wallet_alias';
-  static const String _passwordKey = 'user_password';
+  static const String _passwordHashKey = 'user_password_hash';
 
   static const String _cerFileNameKey = 'cer_file_name';
   static const String _keyFileNameKey = 'key_file_name';
@@ -25,7 +29,56 @@ class SessionService {
     await _storage.write(key: _nameKey, value: name);
     await _storage.write(key: _emailKey, value: email);
     await _storage.write(key: _aliasKey, value: alias);
-    await _storage.write(key: _passwordKey, value: password);
+    if (password.isNotEmpty) {
+      final hash = await _hashPassword(password);
+      await _storage.write(key: _passwordHashKey, value: hash);
+    }
+    // Remove any legacy plaintext password key left from previous versions
+    await _storage.delete(key: 'user_password');
+  }
+
+  Future<bool> verifyPassword(String password) async {
+    final stored = await _storage.read(key: _passwordHashKey);
+    if (stored == null || stored.isEmpty) return false;
+    return _checkPassword(password, stored);
+  }
+
+  static Future<String> _hashPassword(String password) async {
+    final salt = _generateSalt();
+    final pbkdf2 = Pbkdf2(
+      macAlgorithm: Hmac.sha256(),
+      iterations: 100000,
+      bits: 256,
+    );
+    final secretKey = await pbkdf2.deriveKeyFromPassword(
+      password: password,
+      nonce: salt,
+    );
+    final keyBytes = await secretKey.extractBytes();
+    return '${base64Encode(salt)}:${base64Encode(keyBytes)}';
+  }
+
+  static Future<bool> _checkPassword(String password, String stored) async {
+    final parts = stored.split(':');
+    if (parts.length != 2) return false;
+    final salt = base64Decode(parts[0]);
+    final expectedHash = parts[1];
+    final pbkdf2 = Pbkdf2(
+      macAlgorithm: Hmac.sha256(),
+      iterations: 100000,
+      bits: 256,
+    );
+    final secretKey = await pbkdf2.deriveKeyFromPassword(
+      password: password,
+      nonce: salt,
+    );
+    final keyBytes = await secretKey.extractBytes();
+    return base64Encode(keyBytes) == expectedHash;
+  }
+
+  static List<int> _generateSalt([int length = 16]) {
+    final random = Random.secure();
+    return List.generate(length, (_) => random.nextInt(256));
   }
 
   Future<bool> hasSession() async {
@@ -43,10 +96,6 @@ class SessionService {
 
   Future<String> getWalletAlias() async {
     return await _storage.read(key: _aliasKey) ?? '';
-  }
-
-  Future<String> getUserPassword() async {
-    return await _storage.read(key: _passwordKey) ?? '';
   }
 
   Future<void> saveDocumentsFromQr({
@@ -91,17 +140,15 @@ class SessionService {
     required String keyFileName,
     required String keyContentBase64,
   }) async {
-    await _storage.write(key: 'key_file_name', value: keyFileName);
-
-    await _storage.write(key: 'key_content_base64', value: keyContentBase64);
+    await _storage.write(key: _keyFileNameKey, value: keyFileName);
+    await _storage.write(key: _keyContentKey, value: keyContentBase64);
   }
 
   Future<void> saveCerDocumentFromQr({
     required String cerFileName,
     required String cerContentBase64,
   }) async {
-    await _storage.write(key: 'cer_file_name', value: cerFileName);
-
-    await _storage.write(key: 'cer_content_base64', value: cerContentBase64);
+    await _storage.write(key: _cerFileNameKey, value: cerFileName);
+    await _storage.write(key: _cerContentKey, value: cerContentBase64);
   }
 }

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subir archivos — Wallet SSI</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: Arial, sans-serif;
+      background: #F1F5F9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+      padding: 36px;
+      width: 100%;
+      max-width: 480px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 28px;
+    }
+    .logo-icon {
+      width: 44px; height: 44px;
+      background: #EFF6FF;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 22px;
+    }
+    .logo h1 { font-size: 18px; color: #0F172A; font-weight: 700; }
+    .logo p  { font-size: 13px; color: #64748B; margin-top: 2px; }
+
+    h2 { font-size: 22px; color: #0F172A; margin-bottom: 8px; }
+    .subtitle { font-size: 14px; color: #64748B; margin-bottom: 28px; line-height: 1.5; }
+
+    .field { margin-bottom: 20px; }
+
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 8px;
+    }
+    .ext-badge {
+      background: #EFF6FF;
+      color: #0F62FE;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    .file-input-wrap {
+      position: relative;
+      border: 2px dashed #CBD5E1;
+      border-radius: 12px;
+      padding: 20px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .2s, background .2s;
+    }
+    .file-input-wrap:hover,
+    .file-input-wrap.has-file { border-color: #0F62FE; background: #F0F7FF; }
+    .file-input-wrap input {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      opacity: 0; cursor: pointer;
+    }
+    .file-icon { font-size: 28px; margin-bottom: 8px; }
+    .file-label { font-size: 14px; color: #64748B; }
+    .file-name  { font-size: 13px; color: #0F62FE; font-weight: 600; margin-top: 4px; }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      background: #0F62FE;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .2s;
+      margin-top: 8px;
+    }
+    button:hover:not(:disabled) { opacity: 0.88; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .alert {
+      padding: 14px 16px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.55;
+      margin-top: 20px;
+    }
+    .alert.error   { background: #FEF2F2; color: #991B1B; border: 1px solid #FECACA; }
+    .alert.success { background: #DCFCE7; color: #15803D; border: 1px solid #86EFAC; }
+    .alert.warning { background: #FEF9C3; color: #713F12; border: 1px solid #FDE047; }
+    .alert { display: none; }
+
+    .steps {
+      margin: 20px 0;
+      padding: 16px;
+      background: #F8FAFC;
+      border-radius: 12px;
+      font-size: 13px;
+      color: #475569;
+      line-height: 1.8;
+    }
+    .steps ol { padding-left: 18px; }
+  </style>
+</head>
+<body>
+
+<div class="card" id="mainCard">
+
+  <!-- Logo -->
+  <div class="logo">
+    <div class="logo-icon">🔐</div>
+    <div>
+      <h1>Wallet SSI</h1>
+      <p>Portal de identidad</p>
+    </div>
+  </div>
+
+  <!-- Estado: cargando -->
+  <div id="stateLoading">
+    <p style="color:#64748B;font-size:15px">Verificando sesión…</p>
+  </div>
+
+  <!-- Estado: error de sesión -->
+  <div id="stateInvalid" style="display:none">
+    <div class="alert error" style="display:block">
+      ⚠️ El enlace no es válido o ha expirado.<br>
+      Solicita un nuevo enlace desde el portal.
+    </div>
+  </div>
+
+  <!-- Estado: formulario de subida -->
+  <div id="stateForm" style="display:none">
+    <h2>Subir archivos de identidad</h2>
+    <p class="subtitle">
+      Sube tus archivos de certificado y llave. Serán entregados
+      directamente a tu app móvil y <strong>no se guardarán en ningún servidor</strong>.
+    </p>
+
+    <div class="steps">
+      <ol>
+        <li>Selecciona tu archivo <strong>.cer</strong> y tu archivo <strong>.key</strong></li>
+        <li>Pulsa <strong>Subir archivos</strong></li>
+        <li>Escanea el QR en el portal con tu app móvil</li>
+      </ol>
+    </div>
+
+    <!-- .CER -->
+    <div class="field">
+      <label>
+        Certificado
+        <span class="ext-badge">.cer</span>
+      </label>
+      <div class="file-input-wrap" id="cerWrap">
+        <input type="file" id="cerFile" accept=".cer"
+               onchange="onFileChange('cerFile','cerWrap','cerName')">
+        <div class="file-icon">📄</div>
+        <div class="file-label">Selecciona o arrastra tu archivo .cer</div>
+        <div class="file-name" id="cerName"></div>
+      </div>
+    </div>
+
+    <!-- .KEY -->
+    <div class="field">
+      <label>
+        Llave privada
+        <span class="ext-badge">.key</span>
+      </label>
+      <div class="file-input-wrap" id="keyWrap">
+        <input type="file" id="keyFile" accept=".key"
+               onchange="onFileChange('keyFile','keyWrap','keyName')">
+        <div class="file-icon">🔑</div>
+        <div class="file-label">Selecciona o arrastra tu archivo .key</div>
+        <div class="file-name" id="keyName"></div>
+      </div>
+    </div>
+
+    <button id="btnUpload" onclick="uploadFiles()" disabled>
+      Subir archivos
+    </button>
+
+    <div id="alertBox" class="alert"></div>
+  </div>
+
+  <!-- Estado: éxito -->
+  <div id="stateSuccess" style="display:none">
+    <div style="text-align:center;padding:16px 0 24px">
+      <div style="font-size:56px;margin-bottom:16px">✅</div>
+      <h2 style="margin-bottom:8px">¡Archivos subidos!</h2>
+      <p style="color:#64748B;font-size:15px;line-height:1.6">
+        Tus archivos fueron recibidos correctamente.<br>
+        Ahora escanea el <strong>QR en el portal</strong> con tu app móvil
+        para completar el registro.
+      </p>
+    </div>
+    <div class="alert success" style="display:block">
+      📱 Una vez que escanees el QR, los archivos se entregarán a tu dispositivo
+      y serán eliminados del servidor de forma permanente.
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let _sessionId   = null;
+  let _uploadToken = null;
+
+  // ── Leer parámetros de la URL ──────────────────────────────
+  const params = new URLSearchParams(window.location.search);
+  _sessionId   = params.get('s');
+  _uploadToken = params.get('t');
+
+  window.addEventListener('DOMContentLoaded', () => {
+    if (!_sessionId || !_uploadToken) {
+      show('stateInvalid');
+      return;
+    }
+
+    // Verificar que la sesión sigue activa
+    fetch(`/api/sessions/${_sessionId}/status`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'expired') {
+          show('stateInvalid');
+        } else if (data.status === 'consumed') {
+          show('stateSuccess');
+        } else {
+          show('stateForm');
+        }
+      })
+      .catch(() => show('stateInvalid'));
+  });
+
+  // ── Manejo de selección de archivos ───────────────────────
+  function onFileChange(inputId, wrapId, nameId) {
+    const input = document.getElementById(inputId);
+    const wrap  = document.getElementById(wrapId);
+    const nameEl = document.getElementById(nameId);
+    if (input.files.length > 0) {
+      wrap.classList.add('has-file');
+      nameEl.textContent = input.files[0].name;
+    } else {
+      wrap.classList.remove('has-file');
+      nameEl.textContent = '';
+    }
+    updateUploadButton();
+  }
+
+  function updateUploadButton() {
+    const cer = document.getElementById('cerFile').files.length > 0;
+    const key = document.getElementById('keyFile').files.length > 0;
+    document.getElementById('btnUpload').disabled = !(cer && key);
+  }
+
+  // ── Subir archivos ─────────────────────────────────────────
+  async function uploadFiles() {
+    const cerFile = document.getElementById('cerFile').files[0];
+    const keyFile = document.getElementById('keyFile').files[0];
+
+    if (!cerFile || !keyFile) {
+      showAlert('error', 'Selecciona ambos archivos antes de continuar.');
+      return;
+    }
+
+    const btn = document.getElementById('btnUpload');
+    btn.disabled = true;
+    btn.textContent = 'Subiendo…';
+    hideAlert();
+
+    const form = new FormData();
+    form.append('upload_token', _uploadToken);
+    form.append('cer_file', cerFile, cerFile.name);
+    form.append('key_file', keyFile, keyFile.name);
+
+    try {
+      const res = await fetch(`/api/sessions/${_sessionId}/files`, {
+        method: 'PUT',
+        body: form,
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        const detail = data.detail || 'Error al subir archivos.';
+        if (res.status === 409) {
+          // Ya consumida — mostrar éxito de todas formas
+          show('stateSuccess');
+          return;
+        }
+        showAlert('error', detail);
+        btn.disabled = false;
+        btn.textContent = 'Subir archivos';
+        return;
+      }
+
+      show('stateSuccess');
+
+    } catch (err) {
+      showAlert('error', 'Error de red. Verifica tu conexión e intenta de nuevo.');
+      btn.disabled = false;
+      btn.textContent = 'Subir archivos';
+    }
+  }
+
+  // ── Utilidades UI ──────────────────────────────────────────
+  function show(stateId) {
+    ['stateLoading','stateInvalid','stateForm','stateSuccess'].forEach(id => {
+      document.getElementById(id).style.display = id === stateId ? 'block' : 'none';
+    });
+  }
+
+  function showAlert(type, msg) {
+    const box = document.getElementById('alertBox');
+    box.className = `alert ${type}`;
+    box.style.display = 'block';
+    box.textContent = msg;
+  }
+
+  function hideAlert() {
+    document.getElementById('alertBox').style.display = 'none';
+  }
+</script>
+</body>
+</html>
