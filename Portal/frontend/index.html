@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>Portal Wallet</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.min.js"></script>
+
+  <style>
+
+    body{
+      margin:0;
+      padding:40px;
+      font-family:Arial,sans-serif;
+      background:#f5f5f5;
+    }
+
+    .container{
+      max-width:600px;
+      margin:auto;
+      background:white;
+      padding:30px;
+      border-radius:18px;
+      box-shadow:0 4px 20px rgba(0,0,0,0.08);
+    }
+
+    h1{
+      text-align:center;
+      margin-bottom:30px;
+      color:#111827;
+    }
+
+    .section{
+      margin-bottom:40px;
+      padding-bottom:30px;
+      border-bottom:1px solid #e5e7eb;
+    }
+
+    .field{
+      margin-bottom:20px;
+    }
+
+    label{
+      display:block;
+      margin-bottom:8px;
+      font-weight:bold;
+    }
+
+    input{
+      width:100%;
+      padding:12px;
+    }
+
+    button{
+      width:100%;
+      padding:15px;
+      background:#111827;
+      color:white;
+      border:none;
+      border-radius:12px;
+      cursor:pointer;
+      font-size:16px;
+    }
+
+    button:hover{
+      opacity:0.92;
+    }
+
+    .qr-container{
+      margin-top:20px;
+      display:flex;
+      justify-content:center;
+    }
+
+    .status{
+      margin-top:16px;
+      text-align:center;
+      font-weight:bold;
+    }
+
+    textarea{
+      width:100%;
+      margin-top:16px;
+      min-height:120px;
+      padding:12px;
+      font-size:12px;
+    }
+
+  </style>
+
+</head>
+
+<body>
+
+<div class="container">
+
+  <h1>Portal Wallet SSI</h1>
+
+  <!-- KEY -->
+
+  <div class="section">
+
+    <h2>Archivo .KEY</h2>
+
+    <div class="field">
+
+      <label>Selecciona archivo .key</label>
+
+      <input
+        type="file"
+        id="keyFile"
+        accept=".key"
+      >
+
+    </div>
+
+    <button onclick="generateKeyQR()">
+      Generar QR KEY
+    </button>
+
+    <div
+      class="status"
+      id="keyStatus"
+    ></div>
+
+    <div
+      class="qr-container"
+      id="keyQr"
+    ></div>
+
+    <textarea
+      id="keyJson"
+      readonly
+      placeholder="Contenido QR KEY"
+    ></textarea>
+
+  </div>
+
+  <!-- CER -->
+
+  <div class="section">
+
+    <h2>Archivo .CER</h2>
+
+    <div class="field">
+
+      <label>Selecciona archivo .cer</label>
+
+      <input
+        type="file"
+        id="cerFile"
+        accept=".cer"
+      >
+
+    </div>
+
+    <button onclick="generateCerQR()">
+      Generar QR CER
+    </button>
+
+    <div
+      class="status"
+      id="cerStatus"
+    ></div>
+
+    <div
+      class="qr-container"
+      id="cerQr"
+    ></div>
+
+    <textarea
+      id="cerJson"
+      readonly
+      placeholder="Contenido QR CER"
+    ></textarea>
+
+  </div>
+
+</div>
+
+<script>
+
+async function fileToBase64(file){
+
+  return new Promise((resolve, reject)=>{
+
+    const reader = new FileReader();
+
+    reader.readAsDataURL(file);
+
+    reader.onload = ()=>{
+
+      resolve(
+        reader.result.split(",")[1]
+      );
+    };
+
+    reader.onerror = error =>
+      reject(error);
+  });
+}
+
+async function generateKeyQR(){
+
+  const status =
+    document.getElementById("keyStatus");
+
+  const qrContainer =
+    document.getElementById("keyQr");
+
+  const jsonOutput =
+    document.getElementById("keyJson");
+
+  const file =
+    document.getElementById("keyFile")
+      .files[0];
+
+  if(!file){
+
+    status.innerHTML =
+      "Selecciona archivo .key";
+
+    return;
+  }
+
+  try{
+
+    const base64 =
+      await fileToBase64(file);
+
+    const payload = {
+
+      type: "wallet_key_file",
+
+      key_file_name:
+        file.name,
+
+      key_content_base64:
+        base64,
+
+      uploaded_at:
+        new Date().toISOString()
+    };
+
+    const qrText =
+      JSON.stringify(payload);
+
+    qrContainer.innerHTML = "";
+
+    jsonOutput.value = qrText;
+
+    QRCode.toCanvas(qrText, {
+
+      width:280
+
+    }, function(error, canvas){
+
+      if(error){
+
+        console.error(error);
+
+        status.innerHTML =
+          "Error generando QR KEY";
+
+        return;
+      }
+
+      qrContainer.appendChild(canvas);
+
+      status.innerHTML =
+        "QR KEY generado correctamente";
+    });
+
+  }catch(error){
+
+    console.error(error);
+
+    status.innerHTML =
+      "Error procesando archivo KEY";
+  }
+}
+
+async function generateCerQR(){
+
+  const status =
+    document.getElementById("cerStatus");
+
+  const qrContainer =
+    document.getElementById("cerQr");
+
+  const jsonOutput =
+    document.getElementById("cerJson");
+
+  const file =
+    document.getElementById("cerFile")
+      .files[0];
+
+  if(!file){
+
+    status.innerHTML =
+      "Selecciona archivo .cer";
+
+    return;
+  }
+
+  try{
+
+    const base64 =
+      await fileToBase64(file);
+
+    const payload = {
+
+      type: "wallet_cer_file",
+
+      cer_file_name:
+        file.name,
+
+      cer_content_base64:
+        base64,
+
+      uploaded_at:
+        new Date().toISOString()
+    };
+
+    const qrText =
+      JSON.stringify(payload);
+
+    qrContainer.innerHTML = "";
+
+    jsonOutput.value = qrText;
+
+    QRCode.toCanvas(qrText, {
+
+      width:280
+
+    }, function(error, canvas){
+
+      if(error){
+
+        console.error(error);
+
+        status.innerHTML =
+          "Error generando QR CER";
+
+        return;
+      }
+
+      qrContainer.appendChild(canvas);
+
+      status.innerHTML =
+        "QR CER generado correctamente";
+    });
+
+  }catch(error){
+
+    console.error(error);
+
+    status.innerHTML =
+      "Error procesando archivo CER";
+  }
+}
+
+</script>
+
+</body>
+</html>

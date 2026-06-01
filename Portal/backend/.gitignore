@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.env
+issuer_key.json
+enrollments.json
+did_registry.json

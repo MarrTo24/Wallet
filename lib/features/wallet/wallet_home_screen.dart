@@ -17,6 +17,11 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
   String _userName = 'Usuario';
   String _userInitials = 'US';
   String _didLabel = 'DID pendiente';
+  String _email = '';
+  String _walletAlias = '';
+  bool _identityVerified = false;
+  String _cerFileName = '';
+  String _keyFileName = '';
 
   @override
   void initState() {
@@ -25,18 +30,57 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
   }
 
   Future<void> _loadUser() async {
-    final name = await sessionService.getUserName();
-    final identity = await CryptoIdentityService().getOrCreateIdentity();
-    if (mounted) {
-      setState(() {
-        _userName = name.isNotEmpty ? name : 'Usuario';
-        _userInitials = _userName
-            .substring(0, _userName.length > 1 ? 2 : 1)
-            .toUpperCase();
-        _didLabel = _shortDid(identity.did);
-      });
-    }
+
+  final name =
+      await sessionService.getUserName();
+
+  final email =
+      await sessionService.getUserEmail();
+
+  final alias =
+      await sessionService.getWalletAlias();
+
+  final verified =
+      await sessionService.isIdentityVerified();
+
+  final cerFile =
+      await sessionService.getCerFileName();
+
+  final keyFile =
+      await sessionService.getKeyFileName();
+
+  final identity =
+      await CryptoIdentityService()
+          .getOrCreateIdentity();
+
+  if (mounted) {
+
+    setState(() {
+
+      _userName =
+          name.isNotEmpty ? name : 'Usuario';
+
+      _email = email;
+
+      _walletAlias = alias;
+
+      _identityVerified = verified;
+
+      _cerFileName = cerFile;
+
+      _keyFileName = keyFile;
+
+      _userInitials = _userName
+          .substring(
+            0,
+            _userName.length > 1 ? 2 : 1,
+          )
+          .toUpperCase();
+
+      _didLabel = _shortDid(identity.did);
+    });
   }
+}
 
   String _shortDid(String did) {
     if (did.length <= 24) return did;
@@ -165,7 +209,9 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
                         ),
                       ),
                       const Spacer(),
-                      _StatusBadge(verified: credentials.isNotEmpty),
+                      _StatusBadge(
+                        verified: _identityVerified,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 24),
@@ -187,6 +233,99 @@ class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
                     'DID $_didLabel',
                     style: const TextStyle(color: Colors.white70, fontSize: 14),
                   ),
+                  const SizedBox(height: 18),
+
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(18),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+
+                        const Text(
+                          'Identidad autosoberana',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                          ),
+                        ),
+
+                        const SizedBox(height: 10),
+
+                        Row(
+                          children: [
+
+                            Icon(
+                              _identityVerified
+                                  ? Icons.verified_rounded
+                                  : Icons.pending_rounded,
+                              color: Colors.white,
+                              size: 18,
+                            ),
+
+                            const SizedBox(width: 8),
+
+                            Text(
+                              _identityVerified
+                                  ? 'Verificada correctamente'
+                                  : 'Pendiente',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+
+                        const SizedBox(height: 14),
+
+                        Text(
+                          'Correo: $_email',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                          ),
+                        ),
+
+      const SizedBox(height: 6),
+
+      Text(
+        'Alias wallet: $_walletAlias',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+        ),
+      ),
+
+      const SizedBox(height: 12),
+
+      Text(
+        _cerFileName.isNotEmpty
+            ? 'CER: $_cerFileName'
+            : 'CER pendiente',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+        ),
+      ),
+
+      const SizedBox(height: 6),
+
+      Text(
+        _keyFileName.isNotEmpty
+            ? 'KEY: $_keyFileName'
+            : 'KEY pendiente',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 13,
+        ),
+      ),
+    ],
+  ),
+),
                 ],
               ),
             ),
