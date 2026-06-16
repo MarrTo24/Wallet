@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../core/services/session_service.dart';
+import '../../core/services/wallet_activity_service.dart';
 
 class ScanQrScreen extends StatefulWidget {
   const ScanQrScreen({super.key});
@@ -18,6 +19,7 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
   final MobileScannerController _controller = MobileScannerController();
   final TextEditingController _manualQrController = TextEditingController();
   final SessionService _sessionService = SessionService();
+  final WalletActivityService _activity = WalletActivityService();
 
   bool _handledScan = false;
 
@@ -114,7 +116,10 @@ class _ScanQrScreenState extends State<ScanQrScreen> {
         cerContentBase64: result['cer_base64'] as String? ?? '',
         keyContentBase64: result['key_base64'] as String? ?? '',
       );
-
+      await _activity.addEvent(
+        type: WalletEventType.filesReceived,
+        description: 'Archivos de identidad recibidos del portal',
+      );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(

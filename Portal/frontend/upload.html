@@ -154,13 +154,15 @@
   <div id="stateForm" style="display:none">
     <h2>Subir archivos de identidad</h2>
     <p class="subtitle">
-      Sube tus archivos de certificado y llave. Serán entregados
-      directamente a tu app móvil y <strong>no se guardarán en ningún servidor</strong>.
+      Sube tus archivos de certificado y llave <strong>desde este mismo dispositivo</strong>
+      (celular, tablet o computadora). Serán entregados directamente a tu app móvil y
+      <strong>no se guardarán en ningún servidor</strong>.
     </p>
 
     <div class="steps">
       <ol>
-        <li>Selecciona tu archivo <strong>.cer</strong> y tu archivo <strong>.key</strong></li>
+        <li>Selecciona tu archivo <strong>.cer</strong> y tu archivo <strong>.key</strong>
+            desde el almacenamiento de <strong>este dispositivo</strong></li>
         <li>Pulsa <strong>Subir archivos</strong></li>
         <li>Escanea el QR en el portal con tu app móvil</li>
       </ol>
@@ -176,7 +178,7 @@
         <input type="file" id="cerFile" accept=".cer"
                onchange="onFileChange('cerFile','cerWrap','cerName')">
         <div class="file-icon">📄</div>
-        <div class="file-label">Selecciona o arrastra tu archivo .cer</div>
+        <div class="file-label">Selecciona desde este dispositivo o arrastra tu archivo .cer</div>
         <div class="file-name" id="cerName"></div>
       </div>
     </div>
@@ -191,7 +193,7 @@
         <input type="file" id="keyFile" accept=".key"
                onchange="onFileChange('keyFile','keyWrap','keyName')">
         <div class="file-icon">🔑</div>
-        <div class="file-label">Selecciona o arrastra tu archivo .key</div>
+        <div class="file-label">Selecciona desde este dispositivo o arrastra tu archivo .key</div>
         <div class="file-name" id="keyName"></div>
       </div>
     </div>

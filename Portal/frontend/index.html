@@ -191,8 +191,22 @@
       <input type="text" id="alias" placeholder="mgarcial">
     </div>
     <button id="btnGenerate" onclick="createSession()">
-      Generar sesión y enviar enlace
+      📧 Enviar enlace a mi correo
     </button>
+
+    <!-- Crear archivos — pendiente integración empresarial -->
+    <div style="border-top:1px solid #E2E8F0;margin-top:20px;padding-top:20px">
+      <p style="font-size:12px;color:#94A3B8;text-align:center;margin-bottom:12px">
+        Otras acciones
+      </p>
+      <button id="btnCreateFiles" disabled
+              style="background:#F8FAFC;color:#94A3B8;border:1.5px solid #E2E8F0;cursor:not-allowed">
+        📝 Crear archivos de identidad
+      </button>
+      <p style="font-size:11px;color:#94A3B8;text-align:center;margin-top:8px">
+        Disponible próximamente — requiere integración empresarial
+      </p>
+    </div>
   </div>
 
   <!-- Resultado -->
@@ -219,10 +233,20 @@
       El usuario debe abrir ese enlace en su computadora y subir los archivos <code>.cer</code> y <code>.key</code>.
     </div>
 
-    <div id="fallbackLink" class="link-fallback" style="display:none">
-      ⚠️ No se pudo enviar el correo.<br>
-      Copia y abre este enlace manualmente:<br>
-      <a id="uploadLink" href="#" target="_blank"></a>
+    <div id="fallbackLink" style="display:none;margin-top:14px">
+      <div class="info-box yellow" style="display:block;margin-bottom:12px">
+        ⚠️ No se pudo enviar el correo automáticamente.<br>
+        <small id="smtpError" style="font-family:monospace;word-break:break-all"></small>
+      </div>
+      <button onclick="copyUploadLink()" style="background:#0F62FE;margin-bottom:10px">
+        📋 Copiar enlace de subida
+      </button>
+      <button onclick="resendEmail()" style="background:white;color:#0F62FE;border:2px solid #0F62FE">
+        🔄 Intentar reenviar por correo
+      </button>
+      <p id="copyConfirm" style="display:none;font-size:12px;color:#15803D;text-align:center;margin-top:8px">
+        ✅ Enlace copiado al portapapeles — pégalo en el navegador del dispositivo del usuario.
+      </p>
     </div>
 
     <div class="timer">⏱ Expira: <span id="expiresAt"></span></div>
@@ -232,6 +256,7 @@
 <script>
   let _sessionId = null;
   let _pollInterval = null;
+  let _uploadUrl = null;
 
   async function createSession() {
     const holderName = document.getElementById('holderName').value.trim();
@@ -255,7 +280,8 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Error al crear sesión.');
 
-      _sessionId = data.session_id;
+      _sessionId  = data.session_id;
+      _uploadUrl  = data.upload_url;
 
       // Mostrar sección de resultado
       document.getElementById('form-section').style.display = 'none';
@@ -269,13 +295,12 @@
 
       // Fallback si el email no se envió
       if (!data.email_sent) {
-        const box = document.getElementById('fallbackLink');
-        box.style.display = 'block';
-        const a = document.getElementById('uploadLink');
-        a.href = data.upload_url;
-        a.textContent = data.upload_url;
+        document.getElementById('fallbackLink').style.display = 'block';
+        if (data.email_error) {
+          document.getElementById('smtpError').textContent = 'Error: ' + data.email_error;
+        }
         document.getElementById('infoBox').innerHTML =
-          '⚠️ No se pudo enviar el correo automáticamente. Comparte el enlace de abajo manualmente.';
+          '⚠️ El correo no se envió. Usa el botón <strong>Copiar enlace</strong> para compartirlo manualmente.';
       }
 
       // Renderizar QR
@@ -311,6 +336,35 @@
         clearInterval(_pollInterval);
       }
     } catch (_) { /* silencioso */ }
+  }
+
+  async function copyUploadLink() {
+    if (!_uploadUrl) return;
+    try {
+      await navigator.clipboard.writeText(_uploadUrl);
+    } catch (_) {
+      // fallback para HTTP
+      const ta = document.createElement('textarea');
+      ta.value = _uploadUrl;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    const confirm = document.getElementById('copyConfirm');
+    confirm.style.display = 'block';
+    setTimeout(() => confirm.style.display = 'none', 4000);
+  }
+
+  function resendEmail() {
+    document.getElementById('fallbackLink').style.display = 'none';
+    document.getElementById('result').style.display = 'none';
+    document.getElementById('form-section').style.display = 'block';
+    const btn = document.getElementById('btnGenerate');
+    btn.disabled = false;
+    btn.textContent = '📧 Enviar enlace a mi correo';
+    if (_pollInterval) { clearInterval(_pollInterval); _pollInterval = null; }
+    _sessionId = null;
   }
 
   function _updateBadge(status) {

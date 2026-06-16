@@ -1,10 +1,14 @@
 import base64
 import json
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, EmailStr
 
 from ..config import settings
+from ..limiter import limiter
+from ..logger import get_logger
+
+log = get_logger(__name__)
 from ..session_store import store
 from ..services.email_service import send_upload_link
 from ..services.token_service import (
@@ -29,7 +33,8 @@ class CreateSessionRequest(BaseModel):
 
 
 @router.post("", status_code=201)
-def create_session(data: CreateSessionRequest):
+@limiter.limit("20/minute")
+def create_session(request: Request, data: CreateSessionRequest):
     session = store.create(
         email=data.email.strip(),
         holder_name=data.holder_name.strip(),
@@ -85,7 +90,7 @@ def create_session(data: CreateSessionRequest):
             email_sent = True
         except Exception as exc:
             email_error = str(exc)
-            print(f"[WARN] Email no enviado: {exc}")
+            log.warning("Email no enviado a %s: %s", data.email, exc)
 
     return {
         "ok": True,

@@ -1,8 +1,17 @@
+// Pantalla principal del wallet — muestra identidad, credenciales y actividad.
+// Usa Riverpod para el estado de credenciales y carga datos del usuario
+// desde SessionService y CryptoIdentityService al inicializar.
+// Soporta pull-to-refresh para actualizar credenciales y actividad.
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
 import '../../core/services/crypto_identity_service.dart';
 import '../../core/services/session_service.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/services/wallet_activity_service.dart';
+import '../../core/theme/app_theme.dart';
+import '../../models/credential.dart';
 import 'providers/credential_provider.dart';
 
 class WalletHomeScreen extends ConsumerStatefulWidget {
@@ -13,605 +22,499 @@ class WalletHomeScreen extends ConsumerStatefulWidget {
 }
 
 class _WalletHomeScreenState extends ConsumerState<WalletHomeScreen> {
-  final sessionService = SessionService();
-  String _userName = 'Usuario';
-  String _userInitials = 'US';
-  String _didLabel = 'DID pendiente';
-  String _email = '';
-  String _walletAlias = '';
-  bool _identityVerified = false;
-  String _cerFileName = '';
-  String _keyFileName = '';
+  final _sessionService  = SessionService();
+  final _activityService = WalletActivityService();
+
+  bool   _loading        = true;
+  String _userName       = 'Usuario';
+  String _userInitials   = 'US';
+  String _email          = '';
+  String _walletAlias    = '';
+  String _didLabel       = '';
+  bool   _identityVerified = false;
+  List<WalletEvent> _recentActivity = [];
 
   @override
   void initState() {
     super.initState();
-    _loadUser();
+    _loadAll();
   }
 
-  Future<void> _loadUser() async {
+  /// Carga en paralelo datos del usuario, identidad DID y actividad reciente.
+  Future<void> _loadAll() async {
+    setState(() => _loading = true);
+    await Future.wait([_loadUserData(), _loadActivity()]);
+    if (mounted) setState(() => _loading = false);
+  }
 
-  final name =
-      await sessionService.getUserName();
-
-  final email =
-      await sessionService.getUserEmail();
-
-  final alias =
-      await sessionService.getWalletAlias();
-
-  final verified =
-      await sessionService.isIdentityVerified();
-
-  final cerFile =
-      await sessionService.getCerFileName();
-
-  final keyFile =
-      await sessionService.getKeyFileName();
-
-  final identity =
-      await CryptoIdentityService()
-          .getOrCreateIdentity();
-
-  if (mounted) {
-
+  /// Lee los datos de sesión y recupera/genera la identidad Ed25519 del holder.
+  Future<void> _loadUserData() async {
+    final name     = await _sessionService.getUserName();
+    final email    = await _sessionService.getUserEmail();
+    final alias    = await _sessionService.getWalletAlias();
+    final verified = await _sessionService.isIdentityVerified();
+    final identity = await CryptoIdentityService().getOrCreateIdentity();
+    if (!mounted) return;
     setState(() {
-
-      _userName =
-          name.isNotEmpty ? name : 'Usuario';
-
-      _email = email;
-
-      _walletAlias = alias;
-
+      _userName         = name.isNotEmpty ? name : 'Usuario';
+      _email            = email;
+      _walletAlias      = alias;
       _identityVerified = verified;
-
-      _cerFileName = cerFile;
-
-      _keyFileName = keyFile;
-
-      _userInitials = _userName
-          .substring(
-            0,
-            _userName.length > 1 ? 2 : 1,
-          )
-          .toUpperCase();
-
-      _didLabel = _shortDid(identity.did);
+      _userInitials     = _initials(name);
+      _didLabel         = _shortDid(identity.did);
     });
   }
-}
 
+  /// Carga los últimos 5 eventos del historial local del wallet.
+  Future<void> _loadActivity() async {
+    final events = await _activityService.getRecentEvents(limit: 5);
+    if (!mounted) return;
+    setState(() => _recentActivity = events);
+  }
+
+  /// Extrae las primeras 2 iniciales del nombre completo.
+  String _initials(String name) {
+    final parts = name.trim().split(' ').where((p) => p.isNotEmpty).toList();
+    if (parts.isEmpty) return 'US';
+    if (parts.length == 1) return parts[0].substring(0, parts[0].length.clamp(1, 2)).toUpperCase();
+    return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+  }
+
+  /// Acorta un DID largo para que sea legible en una sola línea.
   String _shortDid(String did) {
     if (did.length <= 24) return did;
-    return '${did.substring(0, 12)}...${did.substring(did.length - 8)}';
+    return '${did.substring(0, 12)}…${did.substring(did.length - 8)}';
   }
 
-  void _showNotifications(BuildContext context) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Notificaciones',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFEFF6FF),
-                child: Icon(Icons.security, color: Color(0xFF0F62FE)),
-              ),
-              title: const Text('Inicio de sesión exitoso'),
-              subtitle: const Text('Hace un momento'),
-              contentPadding: EdgeInsets.zero,
-            ),
-            const Divider(),
-            ListTile(
-              leading: const CircleAvatar(
-                backgroundColor: Color(0xFFEFF6FF),
-                child: Icon(Icons.info_outline, color: Color(0xFF0F62FE)),
-              ),
-              title: const Text('Bienvenido a Identity Wallet'),
-              subtitle: const Text('Tu identidad digital lista para usarse.'),
-              contentPadding: EdgeInsets.zero,
-            ),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
+  /// Cierra la sesión local y navega al login.
+  Future<void> _logout() async {
+    await _activityService.addEvent(
+      type: WalletEventType.logout,
+      description: 'Sesión cerrada',
     );
+    await _sessionService.clearSession();
+    if (!mounted) return;
+    context.go('/login');
   }
+
+  /// Refresca datos al hacer pull-to-refresh.
+  Future<void> _onRefresh() => _loadAll();
 
   @override
   Widget build(BuildContext context) {
     final credentials = ref.watch(credentialsProvider);
+    final firstName   = _userName.split(' ').first;
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       appBar: AppBar(
         title: const Text('Mi Wallet'),
-        backgroundColor: const Color(0xFFF8FAFC),
-        elevation: 0,
         actions: [
           IconButton(
-            onPressed: () => _showNotifications(context),
+            tooltip: 'Actividad',
             icon: const Icon(Icons.notifications_none_rounded),
+            onPressed: () => _showActivity(context),
           ),
           IconButton(
-            onPressed: () async {
-              await sessionService.clearSession();
-
-              if (!context.mounted) return;
-
-              context.go('/login');
-            },
+            tooltip: 'Cerrar sesión',
             icon: const Icon(Icons.logout_rounded),
+            onPressed: _logout,
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => context.push('/issue-credential'),
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Agregar'),
+        backgroundColor: AppColors.primary,
+        foregroundColor: Colors.white,
+        elevation: 2,
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : RefreshIndicator(
+              onRefresh: _onRefresh,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
+                children: [
+                  // ── Saludo personalizado ──────────────────────────────
+                  _GreetingHeader(firstName: firstName),
+                  const SizedBox(height: 20),
+
+                  // ── Tarjeta hero de identidad ─────────────────────────
+                  _IdentityCard(
+                    name: _userName,
+                    email: _email,
+                    alias: _walletAlias,
+                    initials: _userInitials,
+                    didLabel: _didLabel,
+                    verified: _identityVerified,
+                  ),
+                  const SizedBox(height: 20),
+
+                  // ── Acciones rápidas ──────────────────────────────────
+                  _QuickActions(
+                    onShare: () => context.push('/qr'),
+                    onScan:  () => context.push('/scan'),
+                    onAdd:   () => context.push('/issue-credential'),
+                  ),
+                  const SizedBox(height: 28),
+
+                  // ── Credenciales ──────────────────────────────────────
+                  _SectionHeader(
+                    title: 'Mis credenciales',
+                    actionLabel: credentials.isNotEmpty ? 'Agregar' : null,
+                    onAction: credentials.isNotEmpty
+                        ? () => context.push('/issue-credential')
+                        : null,
+                  ),
+                  const SizedBox(height: 12),
+
+                  if (credentials.isEmpty)
+                    _EmptyCredentials(onScan: () => context.push('/scan'))
+                  else
+                    ...credentials.map(
+                      (c) => Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: _CredentialCard(
+                          credential: c,
+                          onTap: () => context.push('/credential', extra: c),
+                        ),
+                      ),
+                    ),
+
+                  const SizedBox(height: 28),
+
+                  // ── Actividad reciente ────────────────────────────────
+                  const _SectionHeader(title: 'Actividad reciente'),
+                  const SizedBox(height: 12),
+
+                  if (_recentActivity.isEmpty)
+                    const _EmptyActivity()
+                  else
+                    ..._recentActivity.map((e) => _ActivityRow(event: e)),
+                ],
+              ),
+            ),
+    );
+  }
+
+  /// Muestra el historial de actividad en un bottom sheet.
+  void _showActivity(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.5,
+        maxChildSize: 0.9,
+        minChildSize: 0.3,
+        expand: false,
+        builder: (_, sc) => _ActivitySheet(
+          events: _recentActivity,
+          scrollController: sc,
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Widgets de soporte ──────────────────────────────────────────────────────
+
+/// Saludo personalizado con hora del día y nombre.
+class _GreetingHeader extends StatelessWidget {
+  final String firstName;
+  const _GreetingHeader({required this.firstName});
+
+  @override
+  Widget build(BuildContext context) {
+    final h = DateTime.now().hour;
+    final greeting = h < 12 ? 'Buenos días' : h < 19 ? 'Buenas tardes' : 'Buenas noches';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '$greeting, $firstName 👋',
+          style: const TextStyle(
+            fontSize: 26, fontWeight: FontWeight.w800, color: AppColors.textPrimary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        const Text(
+          'Tu identidad digital está protegida.',
+          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+        ),
+      ],
+    );
+  }
+}
+
+/// Tarjeta hero con gradiente azul y datos de la identidad digital.
+class _IdentityCard extends StatelessWidget {
+  final String name, email, alias, initials, didLabel;
+  final bool verified;
+  const _IdentityCard({
+    required this.name, required this.email, required this.alias,
+    required this.initials, required this.didLabel, required this.verified,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(22),
+        decoration: BoxDecoration(
+          borderRadius: AppRadius.heroCard,
+          gradient: const LinearGradient(
+            colors: [AppColors.primary, AppColors.primaryDark],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          boxShadow: AppShadow.identity,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Hola, ${_userName.split(' ')[0]}',
-              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Tu identidad digital está protegida y lista para usarse.',
-              style: TextStyle(fontSize: 15, color: Color(0xFF64748B)),
-            ),
-            const SizedBox(height: 24),
-
-            // Identity Card
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(22),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(28),
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0F62FE), Color(0xFF174EA6)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF0F62FE).withValues(alpha: 0.25),
-                    blurRadius: 24,
-                    offset: const Offset(0, 12),
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 26, backgroundColor: Colors.white,
+                  child: Text(
+                    initials,
+                    style: const TextStyle(
+                      color: AppColors.primary, fontWeight: FontWeight.w800, fontSize: 16,
+                    ),
                   ),
-                ],
+                ),
+                const Spacer(),
+                _VerifiedBadge(verified: verified),
+              ],
+            ),
+            const SizedBox(height: 18),
+            const Text('IDENTIDAD DIGITAL',
+                style: TextStyle(color: Colors.white60, fontSize: 10, letterSpacing: 1.4, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 5),
+            Text(name,
+                style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.12),
+                borderRadius: const BorderRadius.all(Radius.circular(14)),
               ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 28,
-                        backgroundColor: Colors.white,
-                        child: Text(
-                          _userInitials,
-                          style: const TextStyle(
-                            color: Color(0xFF0F62FE),
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                          ),
-                        ),
-                      ),
-                      const Spacer(),
-                      _StatusBadge(
-                        verified: _identityVerified,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'Identidad Digital',
-                    style: TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _userName,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'DID $_didLabel',
-                    style: const TextStyle(color: Colors.white70, fontSize: 14),
-                  ),
-                  const SizedBox(height: 18),
-
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(18),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-
-                        const Text(
-                          'Identidad autosoberana',
-                          style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 13,
-                          ),
-                        ),
-
-                        const SizedBox(height: 10),
-
-                        Row(
-                          children: [
-
-                            Icon(
-                              _identityVerified
-                                  ? Icons.verified_rounded
-                                  : Icons.pending_rounded,
-                              color: Colors.white,
-                              size: 18,
-                            ),
-
-                            const SizedBox(width: 8),
-
-                            Text(
-                              _identityVerified
-                                  ? 'Verificada correctamente'
-                                  : 'Pendiente',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        ),
-
-                        const SizedBox(height: 14),
-
-                        Text(
-                          'Correo: $_email',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                          ),
-                        ),
-
-      const SizedBox(height: 6),
-
-      Text(
-        'Alias wallet: $_walletAlias',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-        ),
-      ),
-
-      const SizedBox(height: 12),
-
-      Text(
-        _cerFileName.isNotEmpty
-            ? 'CER: $_cerFileName'
-            : 'CER pendiente',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-        ),
-      ),
-
-      const SizedBox(height: 6),
-
-      Text(
-        _keyFileName.isNotEmpty
-            ? 'KEY: $_keyFileName'
-            : 'KEY pendiente',
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 13,
-        ),
-      ),
-    ],
-  ),
-),
+                  _CardRow(label: 'Correo', value: email.isNotEmpty ? email : 'No configurado'),
+                  const SizedBox(height: 6),
+                  _CardRow(label: 'Alias',  value: alias.isNotEmpty ? alias : 'No configurado'),
+                  const SizedBox(height: 6),
+                  _CardRow(label: 'DID',    value: didLabel.isNotEmpty ? didLabel : 'Generando…'),
                 ],
               ),
-            ),
-
-            const SizedBox(height: 24),
-
-            // Quick actions
-            Row(
-              children: [
-                Expanded(
-                  child: _ActionButton(
-                    icon: Icons.qr_code_rounded,
-                    label: 'Compartir',
-                    onTap: () {
-                      context.go('/qr');
-                    },
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _ActionButton(
-                    icon: Icons.qr_code_scanner_rounded,
-                    label: 'Escanear',
-                    onTap: () {
-                      context.go('/scan');
-                    },
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 28),
-
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text(
-                  'Credenciales',
-                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
-                ),
-                TextButton(
-                  onPressed: () {
-                    context.push('/issue-credential');
-                  },
-                  child: const Text('Agregar'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            if (credentials.isEmpty)
-              _EmptyCredentialsCard(
-                onScan: () {
-                  context.go('/scan');
-                },
-              )
-            else
-              Column(
-                children: credentials
-                    .map(
-                      (cred) => Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: _CredentialTile(
-                          icon: cred.icon,
-                          title: cred.title,
-                          subtitle: cred.subtitle,
-                          status: cred.status,
-                          onTap: () {
-                            context.push('/credential', extra: cred);
-                          },
-                        ),
-                      ),
-                    )
-                    .toList(),
-              ),
-
-            const SizedBox(height: 28),
-
-            const Text(
-              'Actividad reciente',
-              style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 12),
-            const _ActivityTile(
-              icon: Icons.verified_user_outlined,
-              title: 'Identidad verificada',
-              subtitle: 'Hace unos minutos',
-            ),
-            const _ActivityTile(
-              icon: Icons.lock_outline_rounded,
-              title: 'Acceso seguro iniciado',
-              subtitle: 'Hoy',
             ),
           ],
         ),
-      ),
-    );
-  }
+      );
 }
 
-class _StatusBadge extends StatelessWidget {
+class _CardRow extends StatelessWidget {
+  final String label, value;
+  const _CardRow({required this.label, required this.value});
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Text('$label: ', style: const TextStyle(color: Colors.white60, fontSize: 12)),
+          Expanded(
+            child: Text(value,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      );
+}
+
+class _VerifiedBadge extends StatelessWidget {
   final bool verified;
-
-  const _StatusBadge({required this.verified});
-
+  const _VerifiedBadge({required this.verified});
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.18),
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            verified ? Icons.check_circle_rounded : Icons.schedule_rounded,
-            color: Colors.white,
-            size: 16,
-          ),
-          const SizedBox(width: 6),
-          Text(
-            verified ? 'Verificada' : 'Pendiente',
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: 12,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.18),
+          borderRadius: AppRadius.badge,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(verified ? Icons.verified_rounded : Icons.schedule_rounded, color: Colors.white, size: 13),
+            const SizedBox(width: 5),
+            Text(verified ? 'Verificada' : 'Pendiente',
+                style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w700)),
+          ],
+        ),
+      );
 }
 
-class _EmptyCredentialsCard extends StatelessWidget {
-  final VoidCallback onScan;
-
-  const _EmptyCredentialsCard({required this.onScan});
-
+class _QuickActions extends StatelessWidget {
+  final VoidCallback onShare, onScan, onAdd;
+  const _QuickActions({required this.onShare, required this.onScan, required this.onAdd});
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  Widget build(BuildContext context) => Row(
         children: [
-          const Icon(
-            Icons.qr_code_scanner_rounded,
-            color: Color(0xFF0F62FE),
-            size: 32,
-          ),
-          const SizedBox(height: 12),
-          const Text(
-            'Sin credenciales emitidas',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Genera una invitacion en el portal y escanea el QR para recibir una credencial firmada.',
-            style: TextStyle(color: Color(0xFF64748B), height: 1.35),
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: onScan,
-              icon: const Icon(Icons.qr_code_scanner_rounded),
-              label: const Text('Escanear QR del portal'),
-            ),
-          ),
+          Expanded(child: _ActionBtn(icon: Icons.qr_code_rounded,         label: 'Compartir', onTap: onShare)),
+          const SizedBox(width: 10),
+          Expanded(child: _ActionBtn(icon: Icons.qr_code_scanner_rounded, label: 'Escanear',  onTap: onScan)),
+          const SizedBox(width: 10),
+          Expanded(child: _ActionBtn(icon: Icons.add_circle_outline,      label: 'Agregar',   onTap: onAdd)),
         ],
-      ),
-    );
-  }
+      );
 }
 
-class _ActionButton extends StatelessWidget {
+class _ActionBtn extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-
-  const _ActionButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
+  const _ActionBtn({required this.icon, required this.label, required this.onTap});
   @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 18),
-          child: Column(
-            children: [
-              Icon(icon, color: const Color(0xFF0F62FE), size: 28),
-              const SizedBox(height: 8),
-              Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
-            ],
+  Widget build(BuildContext context) => Material(
+        color: AppColors.surface,
+        borderRadius: AppRadius.card,
+        child: InkWell(
+          borderRadius: AppRadius.card,
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: AppColors.primary, size: 24),
+                const SizedBox(height: 6),
+                Text(label,
+                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+              ],
+            ),
           ),
         ),
-      ),
-    );
-  }
+      );
 }
 
-class _CredentialTile extends StatelessWidget {
-  final IconData icon;
+class _SectionHeader extends StatelessWidget {
   final String title;
-  final String subtitle;
-  final String status;
-  final VoidCallback? onTap;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+  const _SectionHeader({required this.title, this.actionLabel, this.onAction});
+  @override
+  Widget build(BuildContext context) => Row(
+        children: [
+          Expanded(
+            child: Text(title,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+          ),
+          if (actionLabel != null)
+            TextButton(onPressed: onAction, child: Text(actionLabel!)),
+        ],
+      );
+}
 
-  const _CredentialTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.status,
-    this.onTap,
-  });
+class _EmptyCredentials extends StatelessWidget {
+  final VoidCallback onScan;
+  const _EmptyCredentials({required this.onScan});
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: AppRadius.card,
+          border: Border.all(color: AppColors.border),
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 52, height: 52,
+              decoration: const BoxDecoration(color: AppColors.primaryLight, shape: BoxShape.circle),
+              child: const Icon(Icons.badge_outlined, color: AppColors.primary, size: 26),
+            ),
+            const SizedBox(height: 12),
+            const Text('Sin credenciales',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+            const SizedBox(height: 6),
+            const Text(
+              'Escanea el QR del portal para recibir tu primera credencial firmada.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: AppColors.textSecondary, height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: onScan,
+                icon: const Icon(Icons.qr_code_scanner_rounded),
+                label: const Text('Escanear QR del portal'),
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _CredentialCard extends StatelessWidget {
+  final Credential credential;
+  final VoidCallback onTap;
+  const _CredentialCard({required this.credential, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(22),
+    final expired = credential.expiresAt != null && credential.expiresAt!.isBefore(DateTime.now());
+    return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: const Color(0xFFE5E7EB)),
+          color: AppColors.surface,
+          borderRadius: AppRadius.card,
+          border: Border.all(color: expired ? AppColors.error.withValues(alpha: 0.3) : AppColors.border),
         ),
         child: Row(
           children: [
-            CircleAvatar(
-              radius: 24,
-              backgroundColor: const Color(0xFFEFF6FF),
-              child: Icon(icon, color: const Color(0xFF0F62FE)),
+            Container(
+              width: 46, height: 46,
+              decoration: BoxDecoration(
+                color: expired ? AppColors.errorLight : AppColors.primaryLight,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(credential.icon, color: expired ? AppColors.error : AppColors.primary, size: 22),
             ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
+                  Text(credential.title,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.textPrimary)),
+                  const SizedBox(height: 2),
+                  Text(credential.subtitle,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                  if (credential.expiresAt != null)
+                    Text(
+                      expired ? 'Expirada' : 'Vence ${_fmt(credential.expiresAt!)}',
+                      style: TextStyle(fontSize: 11, color: expired ? AppColors.error : AppColors.textTertiary),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      color: Color(0xFF64748B),
-                    ),
-                  ),
                 ],
               ),
             ),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: const Color(0xFFDCFCE7),
-                borderRadius: BorderRadius.circular(999),
+                color: expired ? AppColors.errorLight : AppColors.successLight,
+                borderRadius: AppRadius.badge,
               ),
               child: Text(
-                status,
-                style: const TextStyle(
-                  color: Color(0xFF166534),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
+                expired ? 'Expirada' : credential.status,
+                style: TextStyle(
+                  color: expired ? AppColors.error : AppColors.success,
+                  fontSize: 11, fontWeight: FontWeight.w700,
                 ),
               ),
             ),
@@ -620,29 +523,69 @@ class _CredentialTile extends StatelessWidget {
       ),
     );
   }
+
+  String _fmt(DateTime d) {
+    final l = d.toLocal();
+    return '${l.day.toString().padLeft(2,'0')}/${l.month.toString().padLeft(2,'0')}/${l.year}';
+  }
 }
 
-class _ActivityTile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  const _ActivityTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
+class _EmptyActivity extends StatelessWidget {
+  const _EmptyActivity();
   @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: CircleAvatar(
-        backgroundColor: const Color(0xFFF1F5F9),
-        child: Icon(icon, color: const Color(0xFF334155)),
-      ),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-      subtitle: Text(subtitle),
-    );
-  }
+  Widget build(BuildContext context) => const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Text('Sin actividad registrada aún.',
+            style: TextStyle(color: AppColors.textTertiary, fontSize: 13)),
+      );
+}
+
+class _ActivityRow extends StatelessWidget {
+  final WalletEvent event;
+  const _ActivityRow({required this.event});
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Row(
+          children: [
+            Container(
+              width: 38, height: 38,
+              decoration: const BoxDecoration(color: AppColors.surfaceVariant, shape: BoxShape.circle),
+              child: Icon(event.icon, color: event.iconColor, size: 18),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(event.description,
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+                  Text(event.timeAgo,
+                      style: const TextStyle(fontSize: 11, color: AppColors.textTertiary)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+}
+
+class _ActivitySheet extends StatelessWidget {
+  final List<WalletEvent> events;
+  final ScrollController scrollController;
+  const _ActivitySheet({required this.events, required this.scrollController});
+  @override
+  Widget build(BuildContext context) => ListView(
+        controller: scrollController,
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+        children: [
+          const Text('Historial de actividad',
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: AppColors.textPrimary)),
+          const SizedBox(height: 16),
+          if (events.isEmpty)
+            const Text('Sin actividad.', style: TextStyle(color: AppColors.textSecondary))
+          else
+            ...events.map((e) => _ActivityRow(event: e)),
+        ],
+      );
 }

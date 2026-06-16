@@ -189,7 +189,7 @@ class VerifiableCredentialService {
       }
 
       final issuerDid = credential['issuer']?.toString() ?? 'No disponible';
-      final trustedIssuer = _trustRegistryService.findTrustedIssuer(issuerDid);
+      final trustedIssuer = await _trustRegistryService.findTrustedIssuer(issuerDid);
       final checks = <VerificationCheck>[
         const VerificationCheck.pass(
           'Formato VP',

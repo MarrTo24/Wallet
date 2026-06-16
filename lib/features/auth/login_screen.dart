@@ -5,9 +5,12 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/services/api_service.dart';
 import '../../core/services/portal_file_service.dart';
 import '../../core/services/session_service.dart';
+import '../../core/services/wallet_activity_service.dart';
 import '../../core/services/wallet_security_service.dart';
+import '../../core/theme/app_theme.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -17,16 +20,18 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final SessionService _sessionService = SessionService();
+  final SessionService _sessionService      = SessionService();
   final WalletSecurityService _securityService = WalletSecurityService();
-  final PortalFileService _portalService = PortalFileService();
+  final PortalFileService _portalService    = PortalFileService();
+  final ApiService _apiService              = ApiService();
+  final WalletActivityService _activity     = WalletActivityService();
 
   final _nameController     = TextEditingController();
   final _emailController    = TextEditingController();
   final _aliasController    = TextEditingController();
   final _passwordController = TextEditingController();
   final _portalUrlController = TextEditingController(
-    text: 'http://192.168.1.85:8010',
+    text: 'http://192.168.100.115:8010',
   );
 
   bool _isCreatingAccount = false;
@@ -97,6 +102,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // ─── Login ───────────────────────────────────────────────────────────────
 
+  /// Inicia sesión: verifica credenciales locales y opcionalmente con el backend.
   Future<void> _login() async {
     final email    = _emailController.text.trim();
     final alias    = _aliasController.text.trim();
@@ -105,8 +111,41 @@ class _LoginScreenState extends State<LoginScreen> {
       _showSnack('Ingresa correo, alias wallet y password.');
       return;
     }
+
+    // Intentar autenticar con el backend si está configurado
+    final portalUrl = _portalUrlController.text.trim();
+    if (portalUrl.isNotEmpty) {
+      try {
+        await _apiService.setBaseUrl(portalUrl);
+        final res = await _apiService.post('/api/auth/login', body: {
+          'email': email,
+          'password': password,
+        });
+        // Guardar JWT del backend
+        await _apiService.saveSession(
+          token: res['access_token'] as String? ?? '',
+          name:  res['name']  as String? ?? alias,
+          email: res['email'] as String? ?? email,
+        );
+      } on ApiException catch (e) {
+        // Si el error es 401 (credenciales incorrectas), bloquear
+        if (e.statusCode == 401) {
+          _showSnack('Correo o contraseña incorrectos.');
+          return;
+        }
+        // Otros errores (conexión, servidor caído) — continuar en modo offline
+        debugPrint('Backend no disponible, modo offline: $e');
+      } catch (e) {
+        debugPrint('Backend no disponible, modo offline: $e');
+      }
+    }
+
     await _sessionService.saveSession(
       name: alias, email: email, alias: alias, password: password,
+    );
+    await _activity.addEvent(
+      type: WalletEventType.login,
+      description: 'Sesión iniciada',
     );
     if (!mounted) return;
     final hasPin = await _securityService.hasPin();
@@ -116,6 +155,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // ─── Crear cuenta ────────────────────────────────────────────────────────
 
+  /// Crea una cuenta nueva: registra en backend si está disponible y guarda localmente.
   Future<void> _createAccount() async {
     final name     = _nameController.text.trim();
     final email    = _emailController.text.trim();
@@ -131,6 +171,33 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
+    // Registrar en el backend si hay URL configurada
+    final portalUrl = _portalUrlController.text.trim();
+    if (portalUrl.isNotEmpty) {
+      try {
+        await _apiService.setBaseUrl(portalUrl);
+        final res = await _apiService.post('/api/auth/register', body: {
+          'name':     name,
+          'email':    email,
+          'alias':    alias,
+          'password': password,
+        });
+        await _apiService.saveSession(
+          token: res['access_token'] as String? ?? '',
+          name:  res['name']  as String? ?? name,
+          email: res['email'] as String? ?? email,
+        );
+      } on ApiException catch (e) {
+        if (e.statusCode == 409) {
+          _showSnack('Ya existe una cuenta con ese correo en el portal.');
+          return;
+        }
+        debugPrint('Backend no disponible, modo offline: $e');
+      } catch (e) {
+        debugPrint('Backend no disponible, modo offline: $e');
+      }
+    }
+
     await _sessionService.saveSession(
       name: name, email: email, alias: alias, password: password,
     );
@@ -142,6 +209,10 @@ class _LoginScreenState extends State<LoginScreen> {
         keyContentBase64: _keyBase64,
       );
     }
+    await _activity.addEvent(
+      type: WalletEventType.login,
+      description: 'Cuenta creada — primer ingreso',
+    );
     if (!mounted) return;
     final hasPin = await _securityService.hasPin();
     if (!mounted) return;
@@ -177,7 +248,12 @@ class _LoginScreenState extends State<LoginScreen> {
   // ─── Flujo "Recibir por correo" ──────────────────────────────────────────
 
   Future<void> _requestFilesViaEmail() async {
-    final portalUrl  = _portalUrlController.text.trim();
+    // Usa la URL guardada en ApiService; si no hay, usa el default del controlador
+    final storedUrl = await _apiService.getBaseUrl();
+    final portalUrl = (storedUrl != null && storedUrl.isNotEmpty)
+        ? storedUrl
+        : _portalUrlController.text.trim();
+
     final email      = _emailController.text.trim().isNotEmpty
         ? _emailController.text.trim()
         : _nameController.text.trim();
@@ -185,7 +261,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final alias      = _aliasController.text.trim();
 
     if (portalUrl.isEmpty) {
-      _showSnack('Ingresa la URL del portal.');
+      _showSnack('Configura la URL del portal en ajustes.');
       return;
     }
     if (email.isEmpty) {
@@ -332,7 +408,7 @@ class _LoginScreenState extends State<LoginScreen> {
         : 'Ingresa con tu correo, alias wallet y password.';
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: AppColors.background,
       body: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
@@ -342,12 +418,12 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 36),
               CircleAvatar(
                 radius: 34,
-                backgroundColor: const Color(0xFFEFF6FF),
+                backgroundColor: AppColors.primaryLight,
                 child: Icon(
                   _isCreatingAccount && _createStep == 2
                       ? Icons.folder_shared_rounded
                       : Icons.account_balance_wallet_rounded,
-                  color: const Color(0xFF0F62FE),
+                  color: AppColors.primary,
                   size: 36,
                 ),
               ),
@@ -355,14 +431,19 @@ class _LoginScreenState extends State<LoginScreen> {
               Text(
                 title,
                 style: const TextStyle(
-                  fontSize: 32, fontWeight: FontWeight.bold, height: 1.08,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w800,
+                  height: 1.08,
+                  color: AppColors.textPrimary,
                 ),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 10),
               Text(
                 subtitle,
                 style: const TextStyle(
-                  fontSize: 16, color: Color(0xFF6B7280), height: 1.4,
+                  fontSize: 15,
+                  color: AppColors.textSecondary,
+                  height: 1.4,
                 ),
               ),
               const SizedBox(height: 28),
@@ -379,6 +460,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 _InputField(controller: _passwordController,
                     label: 'Password', icon: Icons.lock_outline_rounded,
                     obscureText: true),
+                const SizedBox(height: 14),
+                _InputField(controller: _portalUrlController,
+                    label: 'URL del portal', icon: Icons.dns_rounded,
+                    keyboardType: TextInputType.url),
                 const SizedBox(height: 22),
                 _PrimaryButton(
                   icon: Icons.login_rounded, label: 'Iniciar sesión',
@@ -431,16 +516,22 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
                 const SizedBox(height: 20),
 
-                // ── OPCIÓN PRINCIPAL: Recibir por correo ─────────────────
+                // ── OPCIÓN 1: Recibir por correo desde PC ────────────────
                 if (!_hasPortalSession) ...[
-                  _SectionLabel(label: 'Opción recomendada'),
+                  _SectionLabel(label: 'Opción 1 — Portal'),
+                  _InputField(
+                    controller: _portalUrlController,
+                    label: 'URL del portal',
+                    icon: Icons.dns_rounded,
+                    keyboardType: TextInputType.url,
+                  ),
+                  const SizedBox(height: 12),
                   _PortalEmailCard(
-                    portalUrlController: _portalUrlController,
                     loading: _claimingFiles,
                     onSend: _requestFilesViaEmail,
                   ),
                   const SizedBox(height: 16),
-                  const _Divider(label: 'o también puedes'),
+                  const _Divider(label: 'otras opciones'),
                   const SizedBox(height: 16),
                 ],
 
@@ -456,18 +547,28 @@ class _LoginScreenState extends State<LoginScreen> {
                   const SizedBox(height: 16),
                 ],
 
-                // ── OPCIONES SECUNDARIAS ─────────────────────────────────
+                // ── OPCIONES 2-4 ──────────────────────────────────────────
                 if (!_hasPortalSession) ...[
+                  // Opción 2: cargar archivos desde este dispositivo
+                  _SectionLabel(label: 'Opción 2 — Desde este dispositivo'),
                   _OutlineButton(
-                    icon: Icons.upload_file_rounded,
-                    label: 'Subir archivos .cer y .key desde el móvil',
+                    icon: Icons.phone_android_rounded,
+                    label: 'Cargar archivos desde este dispositivo',
                     onPressed: _pickDocumentFiles,
                   ),
                   const SizedBox(height: 12),
+                  // Opción 3: escanear QR del portal
                   _OutlineButton(
                     icon: Icons.qr_code_scanner_rounded,
                     label: 'Escanear QR del portal',
                     onPressed: () => context.go('/scan'),
+                  ),
+                  const SizedBox(height: 12),
+                  // Opción 4: crear archivos (próximamente — pendiente código SeguriData)
+                  _DisabledButton(
+                    icon: Icons.add_circle_outline_rounded,
+                    label: 'Crear archivos .cer y .key',
+                    tooltip: 'Próximamente — funcionalidad en desarrollo',
                   ),
                 ],
 
@@ -499,12 +600,10 @@ class _LoginScreenState extends State<LoginScreen> {
 // ─── Tarjeta: Recibir por correo ──────────────────────────────────────────────
 
 class _PortalEmailCard extends StatelessWidget {
-  final TextEditingController portalUrlController;
   final bool loading;
   final VoidCallback onSend;
 
   const _PortalEmailCard({
-    required this.portalUrlController,
     required this.loading,
     required this.onSend,
   });
@@ -514,54 +613,40 @@ class _PortalEmailCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        color: const Color(0xFFEFF6FF),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFBFDBFE)),
+        color: AppColors.primarySurface,
+        borderRadius: AppRadius.card,
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.email_outlined, color: Color(0xFF0F62FE), size: 22),
-              SizedBox(width: 8),
-              Text(
+              Icon(Icons.mark_email_unread_outlined,
+                  color: AppColors.primary, size: 22),
+              const SizedBox(width: 8),
+              const Text(
                 'Recibir archivos por correo',
                 style: TextStyle(
                   fontWeight: FontWeight.w700,
                   fontSize: 15,
-                  color: Color(0xFF1E3A5F),
+                  color: AppColors.textPrimary,
                 ),
               ),
             ],
           ),
           const SizedBox(height: 6),
           const Text(
-            'El portal enviará un enlace a tu correo para que subas los archivos '
-            '.cer y .key desde tu computadora.',
-            style: TextStyle(fontSize: 13, color: Color(0xFF374151), height: 1.4),
+            'Se enviará un enlace seguro a tu correo para subir los archivos '
+            '.cer y .key desde tu computadora. Los archivos se entregan directamente '
+            'al wallet y no se almacenan en ningún servidor.',
+            style: TextStyle(
+              fontSize: 13,
+              color: AppColors.textSecondary,
+              height: 1.45,
+            ),
           ),
           const SizedBox(height: 14),
-          TextField(
-            controller: portalUrlController,
-            decoration: InputDecoration(
-              labelText: 'URL del portal',
-              hintText: 'http://192.168.1.85:8010',
-              prefixIcon: const Icon(Icons.dns_outlined),
-              filled: true,
-              fillColor: Colors.white,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-                borderSide: BorderSide.none,
-              ),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 14, vertical: 12,
-              ),
-            ),
-            keyboardType: TextInputType.url,
-            style: const TextStyle(fontSize: 14),
-          ),
-          const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
             height: 48,
@@ -569,13 +654,17 @@ class _PortalEmailCard extends StatelessWidget {
               onPressed: loading ? null : onSend,
               icon: loading
                   ? const SizedBox(
-                      width: 18, height: 18,
+                      width: 18,
+                      height: 18,
                       child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white,
+                        strokeWidth: 2,
+                        color: Colors.white,
                       ),
                     )
                   : const Icon(Icons.send_rounded),
-              label: Text(loading ? 'Enviando…' : 'Enviar enlace a mi correo'),
+              label: Text(
+                loading ? 'Enviando…' : 'Enviar enlace a mi correo',
+              ),
             ),
           ),
         ],
@@ -610,17 +699,17 @@ class _PortalWaitingCard extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: filesReady
-            ? const Color(0xFFF0FDF4)
+            ? AppColors.successLight
             : expired
-                ? const Color(0xFFFEF9C3)
-                : const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(16),
+                ? AppColors.warningLight
+                : AppColors.surfaceVariant,
+        borderRadius: AppRadius.card,
         border: Border.all(
           color: filesReady
-              ? const Color(0xFF86EFAC)
+              ? AppColors.success.withValues(alpha: 0.4)
               : expired
-                  ? const Color(0xFFFDE047)
-                  : const Color(0xFFE2E8F0),
+                  ? AppColors.warning.withValues(alpha: 0.4)
+                  : AppColors.border,
         ),
       ),
       child: Column(
@@ -641,10 +730,10 @@ class _PortalWaitingCard extends StatelessWidget {
                     fontWeight: FontWeight.w700,
                     fontSize: 14,
                     color: filesReady
-                        ? const Color(0xFF15803D)
+                        ? AppColors.success
                         : expired
-                            ? const Color(0xFF713F12)
-                            : const Color(0xFF374151),
+                            ? AppColors.warning
+                            : AppColors.textPrimary,
                   ),
                 ),
               ),
@@ -655,23 +744,16 @@ class _PortalWaitingCard extends StatelessWidget {
           if (!expired && !filesReady)
             const Text(
               '1. Revisa tu correo\n'
-              '2. Abre el enlace en tu computadora\n'
+              '2. Abre el enlace en cualquier dispositivo\n'
               '3. Sube tus archivos .cer y .key\n'
               '4. Toca el botón de abajo',
               style: TextStyle(
-                fontSize: 13, color: Color(0xFF475569), height: 1.7,
+                fontSize: 13,
+                color: AppColors.textSecondary,
+                height: 1.7,
               ),
             ),
 
-          if (!session.emailSent && session.uploadUrl.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Enlace manual: ${session.uploadUrl}',
-              style: const TextStyle(
-                fontSize: 11, color: Color(0xFF0F62FE),
-              ),
-            ),
-          ],
 
           const SizedBox(height: 14),
 
@@ -682,9 +764,8 @@ class _PortalWaitingCard extends StatelessWidget {
               child: ElevatedButton.icon(
                 onPressed: loading ? null : onClaim,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: filesReady
-                      ? const Color(0xFF16A34A)
-                      : const Color(0xFF0F62FE),
+                  backgroundColor:
+                      filesReady ? AppColors.success : AppColors.primary,
                 ),
                 icon: loading
                     ? const SizedBox(
@@ -747,15 +828,17 @@ class _SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(
-      label.toUpperCase(),
-      style: const TextStyle(
-        fontSize: 11, fontWeight: FontWeight.w700,
-        color: Color(0xFF94A3B8), letterSpacing: 0.8,
-      ),
-    ),
-  );
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Text(
+          label.toUpperCase(),
+          style: const TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            color: AppColors.textTertiary,
+            letterSpacing: 0.9,
+          ),
+        ),
+      );
 }
 
 class _Divider extends StatelessWidget {
@@ -764,18 +847,21 @@ class _Divider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
-    children: [
-      const Expanded(child: Divider()),
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        child: Text(
-          label,
-          style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
-        ),
-      ),
-      const Expanded(child: Divider()),
-    ],
-  );
+        children: [
+          const Expanded(child: Divider()),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textTertiary,
+              ),
+            ),
+          ),
+          const Expanded(child: Divider()),
+        ],
+      );
 }
 
 class _DocumentStatusCard extends StatelessWidget {
@@ -797,25 +883,31 @@ class _DocumentStatusCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE5E7EB)),
+        color: AppColors.surface,
+        borderRadius: AppRadius.card,
+        border: Border.all(color: AppColors.border),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Estado de documentos',
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+          Row(children: [
+            const Icon(Icons.insert_drive_file_outlined,
+                color: AppColors.primary, size: 16),
+            const SizedBox(width: 6),
+            const Text('Estado de documentos',
+                style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: AppColors.textPrimary)),
+          ]),
           const SizedBox(height: 10),
           _StatusRow(
-            label: hasKey ? 'KEY: $keyFileName' : 'KEY pendiente',
-            ready: hasKey || generatedFiles,
-          ),
+              label: hasKey ? 'KEY: $keyFileName' : 'KEY pendiente',
+              ready: hasKey || generatedFiles),
           const SizedBox(height: 6),
           _StatusRow(
-            label: hasCer ? 'CER: $cerFileName' : 'CER pendiente',
-            ready: hasCer || generatedFiles,
-          ),
+              label: hasCer ? 'CER: $cerFileName' : 'CER pendiente',
+              ready: hasCer || generatedFiles),
         ],
       ),
     );
@@ -829,78 +921,109 @@ class _StatusRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Row(
-    children: [
-      Icon(
-        ready ? Icons.check_circle_rounded : Icons.schedule_rounded,
-        color: ready ? const Color(0xFF16A34A) : const Color(0xFF64748B),
-        size: 18,
-      ),
-      const SizedBox(width: 8),
-      Expanded(
-        child: Text(
-          label,
-          style: const TextStyle(
-            fontSize: 13, color: Color(0xFF334155), fontWeight: FontWeight.w600,
+        children: [
+          Icon(
+            ready ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+            color: ready ? AppColors.success : AppColors.textTertiary,
+            size: 18,
           ),
-        ),
-      ),
-    ],
-  );
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                color: AppColors.textPrimary,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      );
 }
 
 class _PrimaryButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback? onPressed;
-  const _PrimaryButton({required this.icon, required this.label, this.onPressed});
+  const _PrimaryButton(
+      {required this.icon, required this.label, this.onPressed});
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    width: double.infinity, height: 54,
-    child: ElevatedButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
-    ),
-  );
+        width: double.infinity,
+        height: 52,
+        child: ElevatedButton.icon(
+          onPressed: onPressed,
+          icon: Icon(icon),
+          label: Text(label),
+        ),
+      );
 }
 
 class _OutlineButton extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
-  const _OutlineButton({
-    required this.icon, required this.label, required this.onPressed,
-  });
+  const _OutlineButton(
+      {required this.icon, required this.label, required this.onPressed});
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    width: double.infinity, height: 50,
-    child: OutlinedButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
-    ),
-  );
+        width: double.infinity,
+        height: 50,
+        child: OutlinedButton.icon(
+          onPressed: onPressed,
+          icon: Icon(icon),
+          label: Text(label),
+        ),
+      );
+}
+
+/// Botón deshabilitado con tooltip explicativo — para funciones en desarrollo.
+class _DisabledButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String tooltip;
+  const _DisabledButton(
+      {required this.icon, required this.label, required this.tooltip});
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: tooltip,
+        child: SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: OutlinedButton.icon(
+            onPressed: null, // Deshabilitado — código pendiente
+            icon: Icon(icon),
+            label: Text(label),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.textTertiary,
+              side: const BorderSide(color: AppColors.border),
+            ),
+          ),
+        ),
+      );
 }
 
 class _TextBtn extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onPressed;
-  const _TextBtn({
-    required this.icon, required this.label, required this.onPressed,
-  });
+  const _TextBtn(
+      {required this.icon, required this.label, required this.onPressed});
 
   @override
   Widget build(BuildContext context) => SizedBox(
-    width: double.infinity, height: 46,
-    child: TextButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
-    ),
-  );
+        width: double.infinity,
+        height: 46,
+        child: TextButton.icon(
+          onPressed: onPressed,
+          icon: Icon(icon),
+          label: Text(label),
+        ),
+      );
 }
 
 class _InputField extends StatelessWidget {
@@ -910,21 +1033,21 @@ class _InputField extends StatelessWidget {
   final bool obscureText;
   final TextInputType? keyboardType;
   const _InputField({
-    required this.controller, required this.label, required this.icon,
-    this.obscureText = false, this.keyboardType,
+    required this.controller,
+    required this.label,
+    required this.icon,
+    this.obscureText = false,
+    this.keyboardType,
   });
 
   @override
   Widget build(BuildContext context) => TextField(
-    controller: controller,
-    obscureText: obscureText,
-    keyboardType: keyboardType,
-    decoration: InputDecoration(
-      labelText: label,
-      prefixIcon: Icon(icon),
-      filled: true,
-      fillColor: Colors.white,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
-    ),
-  );
+        controller: controller,
+        obscureText: obscureText,
+        keyboardType: keyboardType,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon),
+        ),
+      );
 }

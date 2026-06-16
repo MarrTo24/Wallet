@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/services/session_service.dart';
+import '../../core/services/wallet_activity_service.dart';
 import '../../core/services/wallet_enrollment_service.dart';
 import 'providers/credential_provider.dart';
 
@@ -20,6 +21,7 @@ class _EnrollmentReviewScreenState
     extends ConsumerState<EnrollmentReviewScreen> {
   final WalletEnrollmentService _enrollmentService = WalletEnrollmentService();
   final SessionService _sessionService = SessionService();
+  final WalletActivityService _activity = WalletActivityService();
   late final Future<WalletEnrollmentResolveResult> _enrollmentFuture;
   bool _creating = false;
   String _backTarget = '/login';
@@ -52,7 +54,12 @@ class _EnrollmentReviewScreenState
       await ref.read(credentialsProvider.notifier).replaceCredentials([
         account.credential,
       ]);
-
+      // Registrar evento de enrolamiento completado
+      await _activity.addEvent(
+        type: WalletEventType.enrollmentComplete,
+        description: 'Credencial recibida de ${invitation.issuerLabel}',
+        detail: invitation.enrollmentId,
+      );
       if (!mounted) return;
       context.go('/pin', extra: '/wallet');
     } catch (error) {

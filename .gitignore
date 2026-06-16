@@ -43,3 +43,16 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Backend — nunca subir secretos ni datos de runtime
+Portal/backend/.env
+Portal/backend/*.db
+Portal/backend/*.log
+Portal/backend/portal_out.log
+Portal/backend/portal_err.log
+
+# Android build artifacts
+android/build/
+
+# Claude Code internal
+.claude/

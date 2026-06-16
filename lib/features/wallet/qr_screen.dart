@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/services/verifiable_credential_service.dart';
+import '../../core/services/wallet_activity_service.dart';
 import '../../core/services/wallet_security_service.dart';
 import '../../models/credential.dart';
 import 'providers/credential_provider.dart';
@@ -54,11 +55,16 @@ class _QrScreenState extends ConsumerState<QrScreen> {
     }
   }
 
+  /// Desbloquea la pantalla de QR y registra el evento de compartir.
   void _unlockQr() {
     setState(() {
       _authorized = true;
       _authenticating = false;
     });
+    WalletActivityService().addEvent(
+      type: WalletEventType.qrShared,
+      description: 'QR de credencial generado para compartir',
+    );
   }
 
   Future<void> _authorizeWithPin() async {
@@ -71,10 +77,10 @@ class _QrScreenState extends ConsumerState<QrScreen> {
 
     if (!mounted || enteredPin == null) return;
 
-    final validPin = await _securityService.verifyPin(enteredPin);
+    final result = await _securityService.verifyPin(enteredPin);
     if (!mounted) return;
 
-    if (validPin) {
+    if (result.status == PinStatus.success) {
       _unlockQr();
     } else {
       ScaffoldMessenger.of(

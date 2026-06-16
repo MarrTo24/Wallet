@@ -1,0 +1,169 @@
+###############################################################################
+# Codemagic CI/CD — SeguriData Identity Wallet
+#
+# Dos workflows:
+#   android-workflow  →  APK release firmado (Google Play)
+#   ios-workflow      →  IPA release (App Store / TestFlight / Ad Hoc)
+#
+# CONFIGURACIÓN EN EL DASHBOARD DE CODEMAGIC (antes de hacer push):
+#
+# 1. Conecta tu repositorio en https://codemagic.io
+#
+# 2. Android — en "Environment variables" crea el grupo "android_signing":
+#      CM_KEYSTORE         = tu keystore en base64 (ver instrucciones abajo)
+#      CM_KEYSTORE_PASS    = contraseña del keystore
+#      CM_KEY_ALIAS        = alias de la clave
+#      CM_KEY_PASS         = contraseña de la clave
+#    Para codificar el keystore: base64 -i release.keystore | pbcopy (Mac)
+#                                 certutil -encode release.keystore tmp && findstr /v /c:- tmp > out.b64 (Windows)
+#
+# 3. iOS — en "Integrations" conecta tu cuenta de Apple Developer:
+#      - App Store Connect API Key (Team ID + Key ID + .p8 privada)
+#      El nombre de la integración debe ser: "ASC_key"
+#      Bundle ID a registrar en Apple: com.letmi.identitywallet.identityWalletMvp
+#
+# 4. Notificaciones — cambia el email si es necesario.
+###############################################################################
+
+definitions:
+  env_versions: &env_versions
+    flutter: 3.41.6
+    java: "17"
+
+  scripts:
+    - &get_packages
+      name: Instalar paquetes Flutter
+      script: flutter pub get
+
+    - &analyze
+      name: Análisis estático
+      script: flutter analyze --no-fatal-infos
+
+workflows:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # ANDROID — APK release firmado para distribución o Google Play
+  # ─────────────────────────────────────────────────────────────────────────
+  android-workflow:
+    name: Android Release APK
+    max_build_duration: 60
+    instance_type: linux_x2
+
+    environment:
+      <<: *env_versions
+      groups:
+        - android_signing   # Variables: CM_KEYSTORE, CM_KEYSTORE_PASS, CM_KEY_ALIAS, CM_KEY_PASS
+      vars:
+        PACKAGE_NAME: "com.letmi.identity_wallet.identity_wallet_mvp"
+
+    triggering:
+      events:
+        - push
+        - pull_request
+      branch_patterns:
+        - pattern: main
+          include: true
+        - pattern: sprint*
+          include: true
+
+    scripts:
+      - *get_packages
+      - *analyze
+
+      - name: Configurar firma Android
+        script: |
+          # Decodifica el keystore desde la variable de entorno
+          echo $CM_KEYSTORE | base64 --decode > /tmp/release.keystore
+
+          # Crea el archivo de propiedades de firma
+          cat >> android/key.properties << EOF
+          storePassword=$CM_KEYSTORE_PASS
+          keyPassword=$CM_KEY_PASS
+          keyAlias=$CM_KEY_ALIAS
+          storeFile=/tmp/release.keystore
+          EOF
+
+      - name: Build APK release
+        script: |
+          flutter build apk --release \
+            --build-name=1.0.1 \
+            --build-number=$(($(date +%s)))
+
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
+      - build/app/outputs/mapping/release/mapping.txt   # ProGuard mapping (opcional)
+
+    publishing:
+      email:
+        recipients:
+          - mnavarro@seguridata.com
+        notify:
+          success: true
+          failure: true
+
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # iOS — IPA firmado para TestFlight o App Store
+  # ─────────────────────────────────────────────────────────────────────────
+  ios-workflow:
+    name: iOS Release IPA
+    max_build_duration: 90
+    instance_type: mac_mini_m2
+
+    integrations:
+      app_store_connect: ASC_key   # Nombre de la integración creada en el dashboard
+
+    environment:
+      <<: *env_versions
+      ios_signing:
+        distribution_type: app_store   # Opciones: development | ad_hoc | app_store | enterprise
+        bundle_identifier: com.letmi.identitywallet.identityWalletMvp
+
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+
+    scripts:
+      - *get_packages
+      - *analyze
+
+      - name: Configurar versión del build
+        script: |
+          BUILD_NUMBER=$(($(date +%s)))
+          flutter build ios --release \
+            --no-codesign \
+            --build-name=1.0.1 \
+            --build-number=$BUILD_NUMBER
+
+      - name: Firmar y exportar IPA
+        script: |
+          xcode-project use-profiles
+          cd ios
+          xcodebuild -workspace Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -archivePath "$CM_BUILD_DIR/Runner.xcarchive" \
+            archive \
+            OTHER_CODE_SIGN_FLAGS="--keychain /Users/builder/Library/Keychains/ios-build.keychain"
+          xcode-project build-ipa \
+            --workspace ios/Runner.xcworkspace \
+            --archive-path "$CM_BUILD_DIR/Runner.xcarchive"
+
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true      # Envía automáticamente a TestFlight
+        submit_to_app_store: false      # Cambiar a true para publicar directamente
+      email:
+        recipients:
+          - mnavarro@seguridata.com
+        notify:
+          success: true
+          failure: true

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/services/verifiable_credential_service.dart';
+import '../../core/services/wallet_activity_service.dart';
 
 class VerificationResultScreen extends StatelessWidget {
   final String qrValue;
@@ -25,6 +26,14 @@ class VerificationResultScreen extends StatelessWidget {
 
         final result = snapshot.data ?? VerificationResult.invalid('No se pudo verificar la presentacion.');
         final status = _statusFor(result);
+
+        // Registrar el evento de verificación en el historial local
+        WalletActivityService().addEvent(
+          type: result.isValid ? WalletEventType.verificationOk : WalletEventType.verificationFail,
+          description: result.isValid
+              ? 'Credencial verificada — ${result.subjectName}'
+              : 'Verificación fallida',
+        );
 
         return Scaffold(
           backgroundColor: const Color(0xFFF8FAFC),
